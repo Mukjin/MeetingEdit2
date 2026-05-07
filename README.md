@@ -15,74 +15,38 @@
 
 ---
 
-## 시스템 요구사항
+## Claude Code로 시작하기
 
-| 항목 | 요구사항 |
-|------|----------|
-| OS | macOS (Apple Silicon 필수 — M1/M2/M3/M4) |
-| Python | 3.10 이상 |
-| Node.js | 18 이상 |
-| ffmpeg | brew로 설치 |
-| Claude Code | CLI 인증 필요 |
+Claude Code가 설치되어 있다면 아래 프롬프트를 붙여넣는 것만으로 설치부터 실행까지 끝납니다.
 
----
-
-## 로컬 실행 방법
-
-### 1. 레포 클론
-
-```bash
-git clone https://github.com/Mukjin/MeetingEdit2.git
-cd MeetingEdit2
+```text
+https://github.com/Mukjin/MeetingEdit2.git 를 클론하고 README.md를 읽어서
+의존성을 전부 설치한 다음 meeting-edit-ui/run.sh 로 서버를 실행해줘.
+서버가 뜨면 http://localhost:5173 을 알려주고 기다려.
 ```
 
-### 2. 의존성 설치
+Claude Code가 클론 → 의존성 설치 → 서버 시작까지 자동으로 처리합니다.
 
-```bash
-# ffmpeg (없다면)
-brew install ffmpeg
+서버가 실행되면 브라우저에서 **http://localhost:5173** 을 열어 사용하거나,
+Claude Code에게 직접 편집을 요청할 수 있습니다.
 
-# Python 패키지
-pip3 install uv
-uv sync
-# 또는: pip3 install -e .
-
-# mlx-whisper (트랜스크립션)
-pip3 install mlx-whisper --break-system-packages
+```text
+/Users/이름/Videos/meeting.mp4 파일을 편집해줘. 쇼츠 모드로 10~15분으로 줄여줘.
 ```
-
-### 3. Claude Code 로그인
-
-```bash
-# 미설치 시
-npm install -g @anthropic-ai/claude-code
-
-# 로그인
-claude login
-```
-
-### 4. 웹 UI 실행
-
-```bash
-cd meeting-edit-ui
-./run.sh
-```
-
-브라우저에서 **http://localhost:5173** 열기
 
 ---
 
 ## 사용 방법
 
 ```
-1. 영상 선택   →  mp4 절대경로 입력
-2. 트랜스크립션 →  시작 버튼 클릭 (30~40분 소요)
-3. AI 자동 분석 →  모드 선택 후 ✦ AI 분석 클릭 (1~2분)
-4. EDL 검토    →  자동 생성된 구간 확인/수정
-5. 렌더        →  렌더 시작 → preview.mp4 생성
+1. 영상 선택    →  mp4 절대경로 입력
+2. 트랜스크립션  →  시작 버튼 클릭 (30~40분 소요)
+3. AI 자동 분석  →  모드 선택 후 ✦ AI 분석 클릭 (1~2분)
+4. EDL 검토     →  자동 생성된 구간 확인/수정
+5. 렌더         →  렌더 시작 → preview.mp4 생성
 ```
 
-결과물은 원본 영상과 같은 폴더의 `edit_MMDD/` 안에 저장됩니다.
+결과물은 원본 영상과 같은 폴더의 `edit_날짜/` 안에 저장됩니다.
 
 ---
 
@@ -108,3 +72,56 @@ MeetingEdit2/
 - Apple Silicon(M-series Mac) 전용 — mlx-whisper가 Intel Mac / Linux에서 동작하지 않습니다
 - 영상 파일은 로컬 디스크에 있어야 합니다
 - 트랜스크립션은 한국어 최적화 기준입니다
+
+---
+
+<details>
+<summary>수동 설치 방법</summary>
+
+### 시스템 요구사항
+
+| 항목 | 요구사항 |
+|------|----------|
+| OS | macOS (Apple Silicon 필수 — M1/M2/M3/M4) |
+| Python | 3.10 이상 |
+| Node.js | 18 이상 |
+| ffmpeg | brew로 설치 |
+| Claude Code | CLI 인증 필요 |
+
+### 1. 레포 클론
+
+```bash
+git clone https://github.com/Mukjin/MeetingEdit2.git
+cd MeetingEdit2
+```
+
+### 2. 의존성 설치
+
+```bash
+# ffmpeg
+brew install ffmpeg
+
+# Python 패키지
+pip3 install uv && uv sync
+
+# mlx-whisper
+pip3 install mlx-whisper --break-system-packages
+```
+
+### 3. Claude Code 로그인
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+### 4. 웹 UI 실행
+
+```bash
+cd meeting-edit-ui
+./run.sh
+```
+
+브라우저에서 **http://localhost:5173** 열기
+
+</details>
