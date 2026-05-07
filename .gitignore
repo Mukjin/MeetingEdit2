@@ -58,3 +58,17 @@ master.srt
 takes_packed.md
 edl.json
 project.md
+
+# Large video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Test session data
+Test/.claude/
+
+# Frontend build artifacts & deps
+meeting-edit-ui/frontend/node_modules/
+meeting-edit-ui/frontend/dist/
+meeting-edit-ui/backend/.env
