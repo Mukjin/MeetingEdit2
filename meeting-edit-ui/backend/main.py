@@ -57,6 +57,96 @@ SKILL_DIR = Path.home() / ".claude/skills/video-use/helpers"
 PACK_SCRIPT = SKILL_DIR / "pack_transcripts.py"
 RENDER_SCRIPT = SKILL_DIR / "render.py"
 
+PUNCT_BREAK = set(".!?…。！？")
+SUB_WORDS_PER_CUE = 6    # target words per subtitle cue
+SUB_MIN_DURATION = 1.2   # minimum seconds a cue stays on screen
+
+
+def _words_in_range(transcript: dict, t_start: float, t_end: float) -> list[dict]:
+    out = []
+    for w in transcript.get("words", []):
+        if w.get("type") != "word":
+            continue
+        ws, we = w.get("start"), w.get("end")
+        if ws is None or we is None:
+            continue
+        if we <= t_start or ws >= t_end:
+            continue
+        out.append(w)
+    return out
+
+
+def build_subtitle_cues(edl: dict, edit_dir: Path) -> list[dict]:
+    """Return list of {index, start, end, text} dicts from transcript+EDL."""
+    transcripts_dir = edit_dir / "transcripts"
+    entries: list[tuple[float, float, str]] = []
+    seg_offset = 0.0
+
+    for r in edl.get("ranges", []):
+        src_name = r["source"]
+        seg_start = float(r["start"])
+        seg_end = float(r["end"])
+        seg_duration = seg_end - seg_start
+
+        tr_path = transcripts_dir / f"{src_name}.json"
+        if not tr_path.exists():
+            seg_offset += seg_duration
+            continue
+
+        transcript = json.loads(tr_path.read_text())
+        words_in_seg = _words_in_range(transcript, seg_start, seg_end)
+
+        chunks: list[list[dict]] = []
+        current: list[dict] = []
+        for w in words_in_seg:
+            text = (w.get("text") or "").strip()
+            if not text:
+                continue
+            current.append(w)
+            ends_in_punct = bool(text) and text[-1] in PUNCT_BREAK
+            if len(current) >= SUB_WORDS_PER_CUE or ends_in_punct:
+                chunks.append(current)
+                current = []
+        if current:
+            chunks.append(current)
+
+        for chunk in chunks:
+            local_start = max(seg_start, chunk[0].get("start", seg_start))
+            local_end = min(seg_end, chunk[-1].get("end", seg_end))
+            out_start = max(0.0, local_start - seg_start) + seg_offset
+            out_end = max(0.0, local_end - seg_start) + seg_offset
+            # enforce minimum display duration
+            if out_end - out_start < SUB_MIN_DURATION:
+                out_end = out_start + SUB_MIN_DURATION
+            text = re.sub(r"\s+", " ", " ".join(
+                (w.get("text") or "").strip() for w in chunk
+            )).strip().rstrip(",;:")
+            entries.append((out_start, out_end, text))
+
+        seg_offset += seg_duration
+
+    entries.sort(key=lambda e: e[0])
+    return [{"index": i + 1, "start": a, "end": b, "text": t}
+            for i, (a, b, t) in enumerate(entries)]
+
+
+def _srt_timestamp(seconds: float) -> str:
+    total_ms = int(round(seconds * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def write_srt(cues: list[dict], out_path: Path) -> None:
+    lines = []
+    for c in cues:
+        lines.append(str(c["index"]))
+        lines.append(f"{_srt_timestamp(c['start'])} --> {_srt_timestamp(c['end'])}")
+        lines.append(c["text"])
+        lines.append("")
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +164,7 @@ class EDLSaveRequest(BaseModel):
 class RenderRequest(BaseModel):
     edit_dir: str
     video_path: str  # for edit_report
+    subtitles: bool = False
 
 class ReportRequest(BaseModel):
     edit_dir: str
@@ -284,7 +375,7 @@ def _transcribe_worker(job_id: str, video_path: str, edit_dir: str):
         jobs[job_id]["message"] = str(e)
 
 
-def _render_worker(job_id: str, edit_dir: str, video_path: str):
+def _render_worker(job_id: str, edit_dir: str, video_path: str, subtitles: bool = False):  # subtitles param kept for compat
     jobs[job_id]["status"] = "running"
     jobs[job_id]["message"] = "렌더 준비 중..."
     try:
@@ -294,10 +385,13 @@ def _render_worker(job_id: str, edit_dir: str, video_path: str):
         if not edl_path.exists():
             raise RuntimeError("edl.json이 없습니다. EDL을 먼저 저장하세요.")
 
-        jobs[job_id]["message"] = "렌더 중... (시간이 걸릴 수 있습니다)"
+        cmd = [sys.executable, str(RENDER_SCRIPT),
+               str(edl_path), "-o", str(out_path), "--preview"]
+        edl_data = json.loads(edl_path.read_text(encoding="utf-8"))
+        has_subs = bool(edl_data.get("subtitles"))
+        jobs[job_id]["message"] = "렌더 중... (자막 포함)" if has_subs else "렌더 중... (시간이 걸릴 수 있습니다)"
         result = subprocess.run(
-            [sys.executable, str(RENDER_SCRIPT),
-             str(edl_path), "-o", str(out_path), "--preview"],
+            cmd,
             capture_output=True, text=True, cwd=str(edit_dir)
         )
 
@@ -500,8 +594,58 @@ def video_info(req: VideoInfoRequest):
     }
 
 
+class SubtitleCue(BaseModel):
+    index: int
+    start: float
+    end: float
+    text: str
+
+class SubtitleSaveRequest(BaseModel):
+    edit_dir: str
+    cues: list[SubtitleCue]
+
 class ApiKeyRequest(BaseModel):
     api_key: str
+
+@app.post("/api/subtitles/generate")
+def subtitles_generate(req: EDLSaveRequest):
+    edl_path = Path(req.edit_dir) / "edl.json"
+    if not edl_path.exists():
+        raise HTTPException(400, "edl.json이 없습니다. EDL을 먼저 저장하세요.")
+    edl = json.loads(edl_path.read_text(encoding="utf-8"))
+    cues = build_subtitle_cues(edl, Path(req.edit_dir))
+    if not cues:
+        raise HTTPException(400, "트랜스크립트를 찾을 수 없습니다. 트랜스크립션을 먼저 실행하세요.")
+    return {"cues": cues}
+
+
+@app.post("/api/subtitles/save")
+def subtitles_save(req: SubtitleSaveRequest):
+    edit_dir = Path(req.edit_dir)
+    edit_dir.mkdir(parents=True, exist_ok=True)
+    srt_path = edit_dir / "subtitles.srt"
+    cues_data = [c.model_dump() for c in req.cues]
+    write_srt(cues_data, srt_path)
+    # Update EDL subtitles field
+    edl_path = edit_dir / "edl.json"
+    if edl_path.exists():
+        edl = json.loads(edl_path.read_text(encoding="utf-8"))
+        edl["subtitles"] = str(srt_path)
+        edl_path.write_text(json.dumps(edl, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"saved": str(srt_path), "count": len(cues_data)}
+
+
+@app.delete("/api/subtitles")
+def subtitles_delete(edit_dir: str):
+    srt_path = Path(edit_dir) / "subtitles.srt"
+    srt_path.unlink(missing_ok=True)
+    edl_path = Path(edit_dir) / "edl.json"
+    if edl_path.exists():
+        edl = json.loads(edl_path.read_text(encoding="utf-8"))
+        edl["subtitles"] = None
+        edl_path.write_text(json.dumps(edl, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True}
+
 
 @app.get("/api/settings/apikey")
 def get_apikey_status():
@@ -586,7 +730,7 @@ def render_start(req: RenderRequest):
     jobs[job_id] = {"status": "pending", "message": "대기 중..."}
     t = threading.Thread(
         target=_render_worker,
-        args=(job_id, req.edit_dir, req.video_path),
+        args=(job_id, req.edit_dir, req.video_path, req.subtitles),
         daemon=True
     )
     t.start()
